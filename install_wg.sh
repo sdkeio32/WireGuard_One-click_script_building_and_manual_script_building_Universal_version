@@ -96,13 +96,13 @@ docker run -d --name hysteria2 \
   -p $HYSTERIA_PORT:$HYSTERIA_PORT/udp \
   tobyxdd/hysteria server --config /etc/hysteria/config.yaml
 
-# ========== 分流 IP 拉取（含修复） ==========
+# ========== 分流 IP 拉取 ==========
 echo "[+] 获取最新 Telegram / Signal / YouTube IP..."
 
 # Telegram
 curl -s https://core.telegram.org/resources/cidr.txt | grep -Eo '([0-9.]+/..?)' > "$CONFIG_GEN/telegram.txt"
 
-# Signal（使用 dig 修复）
+# Signal（修复方式）
 {
   dig +short signal.org
   dig +short www.signal.org
@@ -111,9 +111,9 @@ curl -s https://core.telegram.org/resources/cidr.txt | grep -Eo '([0-9.]+/..?)' 
 # YouTube
 dig +short youtube.com | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' > "$CONFIG_GEN/youtube.txt"
 
+# 使用临时文件合并 IP 避免冲突
 cat "$CONFIG_GEN/telegram.txt" "$CONFIG_GEN/signal.txt" "$CONFIG_GEN/youtube.txt" > "$CONFIG_GEN/split_ips.tmp"
 mv "$CONFIG_GEN/split_ips.tmp" "$CONFIG_GEN/split_ips.txt"
-
 
 # ========== 客户端配置生成 ==========
 echo "[+] 生成客户端配置..."
