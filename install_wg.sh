@@ -15,14 +15,26 @@ PRIVATE_SUBNET="10.10.0.0/24"
 DOCKER_IMAGE="tobyxdd/hysteria"
 WG_IFACE="wg0"
 
-# 创建必要目录
+# 创建目录结构
 mkdir -p "$WG_DIR" "$TOOL_DIR" "$QR_DIR" "$CONFIG_GEN"
 
 echo "[+] 安装依赖..."
 sudo apt update
-sudo apt install -y wireguard qrencode curl unzip docker.io docker-compose iptables iproute2
+sudo apt install -y wireguard qrencode curl unzip iptables iproute2 lsb-release ca-certificates gnupg
 
-# ========== 密钥生成 ==========
+# 修复 Docker 安装冲突方式
+echo "[+] 修复 Docker 安装冲突，使用官方源..."
+sudo apt remove -y docker docker-engine docker.io containerd runc || true
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# ========== 生成密钥 ==========
 echo "[+] 生成 WireGuard 密钥对..."
 cd "$WG_DIR"
 wg genkey | tee server_private.key | wg pubkey > server_public.key
@@ -40,8 +52,8 @@ HYSTERIA_PORT=$(shuf -i ${HYSTERIA_PORT_START}-${HYSTERIA_PORT_END} -n 1)
 echo "[+] WireGuard 端口: $WG_PORT"
 echo "[+] Hysteria2 端口: $HYSTERIA_PORT"
 
-# ========== 配置 WireGuard ==========
-echo "[+] 写入 WireGuard 服务端配置..."
+# ========== WireGuard 服务端配置 ==========
+echo "[+] 创建 WireGuard 配置..."
 cat > "$WG_DIR/wg0.conf" <<EOF
 [Interface]
 PrivateKey = $SERVER_PRIV_KEY
@@ -58,13 +70,13 @@ EOF
 sudo wg-quick down "$WG_IFACE" 2>/dev/null || true
 sudo wg-quick up "$WG_DIR/wg0.conf"
 
-# ========== 自签TLS证书 ==========
-echo "[+] 生成自签名TLS证书..."
+# ========== TLS 自签证书 ==========
+echo "[+] 生成自签TLS证书..."
 mkdir -p "$TOOL_DIR/tls"
 openssl req -x509 -newkey rsa:2048 -keyout "$TOOL_DIR/tls/key.pem" -out "$TOOL_DIR/tls/cert.pem" -days 365 -nodes -subj "/CN=spotify.com"
 
 # ========== 部署 Hysteria2 ==========
-echo "[+] 部署 Hysteria2 Docker..."
+echo "[+] 启动 Hysteria2 容器..."
 cat > "$TOOL_DIR/hysteria2-config.yaml" <<EOF
 listen: :$HYSTERIA_PORT
 tls:
@@ -89,8 +101,8 @@ docker run -d --name hysteria2 \
   -p $HYSTERIA_PORT:$HYSTERIA_PORT/udp \
   $DOCKER_IMAGE server --config /etc/hysteria/config.yaml
 
-# ========== 拉取分流IP段 ==========
-echo "[+] 获取 Telegram/Signal/Youtube IP..."
+# ========== 分流 IP 抓取 ==========
+echo "[+] 获取分流 IP：Telegram / Signal / YouTube..."
 curl -s https://core.telegram.org/resources/cidr.txt | grep -Eo '([0-9.]+/..?)' > "$CONFIG_GEN/telegram.txt"
 curl -s https://signal.org/.well-known/relayinfo.json | jq -r '.relays[].ipv4' | sed 's/$/\/32/' > "$CONFIG_GEN/signal.txt"
 dig +short youtube.com | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' > "$CONFIG_GEN/youtube.txt"
@@ -125,18 +137,18 @@ AllowedIPs = $(paste -sd "," "$CONFIG_GEN/split_ips.txt")
 PersistentKeepalive = 25
 EOF
 
-# ========== 生成二维码 ==========
+# ========== 二维码生成 ==========
 echo "[+] 生成二维码..."
-qrencode -t ansiutf8 < "$CONFIG_GEN/wg-global.conf"
 qrencode -o "$QR_DIR/qr-global.png" < "$CONFIG_GEN/wg-global.conf"
 qrencode -o "$QR_DIR/qr-split.png" < "$CONFIG_GEN/wg-split.conf"
 
-# ========== 打包导出 ==========
-echo "[+] 打包客户端配置..."
+# ========== ZIP 打包 ==========
+echo "[+] 打包配置..."
 cd "$CONFIG_GEN"
-zip -r "$HOME/guard/client-configs.zip" wg-*.conf "$QR_DIR"/*.png
+zip -r "$HOME/guard/client-configs.zip" wg-*.conf
+cp "$QR_DIR"/*.png "$HOME/guard/"
 
-echo -e "\n✅ 安装完成！配置已生成于："
-echo "  - 全局代理二维码: $QR_DIR/qr-global.png"
-echo "  - 分流代理二维码: $QR_DIR/qr-split.png"
-echo "  - 配置ZIP包: $HOME/guard/client-configs.zip"
+echo -e "\n✅ 安装成功！以下文件已生成："
+echo "🔹 全局配置二维码: $QR_DIR/qr-global.png"
+echo "🔹 分流配置二维码: $QR_DIR/qr-split.png"
+echo "📦 客户端配置打包: $HOME/guard/client-configs.zip"
