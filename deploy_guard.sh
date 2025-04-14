@@ -7,7 +7,11 @@ NC='\033[0m'
 echo -e "${GREEN}开始部署 WireGuard + Hysteria2 服务...${NC}"
 
 # 创建基础目录结构
-mkdir -p /guard/{scripts,config/{wireguard,hysteria2},export/{full_proxy,split_routing}}
+mkdir -p /guard/scripts
+mkdir -p /guard/config/wireguard
+mkdir -p /guard/config/hysteria2
+mkdir -p /guard/export/full_proxy
+mkdir -p /guard/export/split_routing
 
 # 安装基础组件
 echo -e "${GREEN}安装基础组件...${NC}"
@@ -19,17 +23,11 @@ echo -e "${GREEN}下载 Hysteria2...${NC}"
 wget -O /guard/hysteria2 https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64
 chmod +x /guard/hysteria2
 
-# 创建启动脚本
-cat > /guard/scripts/start.sh << 'EOF'
-#!/bin/bash
-PORT=$(shuf -i 39500-39900 -n 1)
-wg-quick up wg0
-/guard/hysteria2 server -c /guard/config/hysteria2/config.json
-EOF
-
 # 创建配置生成脚本
-cat > /guard/scripts/generate_configs.sh << 'EOF'
+cat > /guard/scripts/generate_configs.sh << 'EOFMARKER'
 #!/bin/bash
+
+# 生成密钥
 SERVER_PRIVATE_KEY=$(wg genkey)
 SERVER_PUBLIC_KEY=$(echo "$SERVER_PRIVATE_KEY" | wg pubkey)
 CLIENT_PRIVATE_KEY=$(wg genkey)
@@ -38,7 +36,7 @@ PORT=$(shuf -i 39500-39900 -n 1)
 SERVER_IP=$(curl -s ifconfig.me)
 
 # 生成服务器配置
-cat > /guard/config/wireguard/wg0.conf << WGEOF
+cat > /etc/wireguard/wg0.conf << EOF
 [Interface]
 PrivateKey = ${SERVER_PRIVATE_KEY}
 Address = 10.66.66.1/24
@@ -49,10 +47,10 @@ PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING 
 [Peer]
 PublicKey = ${CLIENT_PUBLIC_KEY}
 AllowedIPs = 10.66.66.2/32
-WGEOF
+EOF
 
-# 生成全局代理客户端配置（临时文件，无换行符）
-cat > /guard/export/full_proxy/client.conf.tmp << EOF
+# 生成全局代理客户端配置
+cat > /guard/export/full_proxy/client.conf << EOF
 [Interface]
 PrivateKey = ${CLIENT_PRIVATE_KEY}
 Address = 10.66.66.2/24
@@ -65,8 +63,8 @@ Endpoint = ${SERVER_IP}:${PORT}
 PersistentKeepalive = 25
 EOF
 
-# 生成分流代理客户端配置（临时文件，无换行符）
-cat > /guard/export/split_routing/client.conf.tmp << EOF
+# 生成分流代理客户端配置
+cat > /guard/export/split_routing/client.conf << EOF
 [Interface]
 PrivateKey = ${CLIENT_PRIVATE_KEY}
 Address = 10.66.66.2/24
@@ -79,30 +77,25 @@ Endpoint = ${SERVER_IP}:${PORT}
 PersistentKeepalive = 25
 EOF
 
-# 移除所有换行符并生成最终配置文件
-tr -d '\n' < /guard/export/full_proxy/client.conf.tmp > /guard/export/full_proxy/client.conf
-tr -d '\n' < /guard/export/split_routing/client.conf.tmp > /guard/export/split_routing/client.conf
-
 # 生成二维码
-qrencode -t ansiutf8 -o /guard/export/full_proxy/qr.txt < /guard/export/full_proxy/client.conf
-qrencode -t ansiutf8 -o /guard/export/split_routing/qr.txt < /guard/export/split_routing/client.conf
+qrencode -t ansiutf8 < /guard/export/full_proxy/client.conf > /guard/export/full_proxy/qr.txt
+qrencode -t ansiutf8 < /guard/export/split_routing/client.conf > /guard/export/split_routing/qr.txt
+EOFMARKER
 
-# 清理临时文件
-rm /guard/export/full_proxy/client.conf.tmp
-rm /guard/export/split_routing/client.conf.tmp
-
-# 为了方便查看，创建带格式的配置文件
-cp /guard/export/full_proxy/client.conf.tmp /guard/export/full_proxy/client.conf.formatted
-cp /guard/export/split_routing/client.conf.tmp /guard/export/split_routing/client.conf.formatted
-EOF
+# 创建启动脚本
+cat > /guard/scripts/start.sh << 'EOFMARKER'
+#!/bin/bash
+wg-quick up wg0
+/guard/hysteria2 server -c /guard/config/hysteria2/config.json
+EOFMARKER
 
 # 创建 Hysteria2 配置
 cat > /guard/config/hysteria2/config.json << EOF
 {
   "listen": ":${PORT}",
   "acme": {
-    "domains": [],
-    "email": ""
+    "domains": ["example.com"],
+    "email": "admin@example.com"
   },
   "obfs": {
     "type": "salamander",
@@ -133,12 +126,12 @@ echo -e "${GREEN}启动服务...${NC}"
 /guard/scripts/start.sh
 
 echo -e "${GREEN}部署完成！${NC}"
-echo -e "${GREEN}全局代理二维码：${NC}"
+echo -e "${GREEN}配置文件和二维码：${NC}"
+echo "1. 全局代理配置："
+cat /guard/export/full_proxy/client.conf
+echo -e "\n2. 全局代理二维码："
 cat /guard/export/full_proxy/qr.txt
-echo -e "${GREEN}分流代理二维码：${NC}"
+echo -e "\n3. 分流代理配置："
+cat /guard/export/split_routing/client.conf
+echo -e "\n4. 分流代理二维码："
 cat /guard/export/split_routing/qr.txt
-echo -e "${GREEN}配置文件位置：${NC}"
-echo "全局代理配置（格式化）：/guard/export/full_proxy/client.conf.formatted"
-echo "分流代理配置（格式化）：/guard/export/split_routing/client.conf.formatted"
-echo "全局代理配置（二维码用）：/guard/export/full_proxy/client.conf"
-echo "分流代理配置（二维码用）：/guard/export/split_routing/client.conf"
