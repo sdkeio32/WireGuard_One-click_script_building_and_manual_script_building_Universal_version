@@ -84,24 +84,18 @@ qrencode -t ansiutf8 < /guard/export/split_routing/client.conf > /guard/export/s
 
 # 保存当前端口号
 echo "${PORT}" > /guard/config/current_port.txt
-EOF
 
-# 创建启动脚本
-cat > /guard/scripts/start.sh << 'EOF'
-#!/bin/bash
-wg-quick up wg0
-PORT=$(cat /guard/config/current_port.txt)
-/guard/hysteria2 server -c /guard/config/hysteria2/config.json
-EOF
-
-# 创建 Hysteria2 配置
-cat > /guard/config/hysteria2/config.json << 'EOF'
+# 更新 Hysteria2 配置
+cat > /guard/config/hysteria2/config.json << HYEOF
 {
-  "listen": ":39500",
+  "listen": ":${PORT}",
+  "auth": {
+    "type": "none"
+  },
   "obfs": {
     "type": "salamander",
     "salamander": {
-      "password": "spotify_password"
+      "password": "spotify_$(head -c 8 /dev/urandom | base64)"
     }
   },
   "masquerade": {
@@ -110,8 +104,24 @@ cat > /guard/config/hysteria2/config.json << 'EOF'
       "url": "https://open.spotify.com/show/3YH7knkMYcRJnjOG7wXtRf",
       "rewriteHost": true
     }
-  }
+  },
+  "bandwidth": {
+    "up": "1 gbps",
+    "down": "1 gbps"
+  },
+  "ignoreClientBandwidth": true,
+  "disableUDP": false,
+  "udpIdleTimeout": "60s"
 }
+HYEOF
+EOF
+
+# 创建启动脚本
+cat > /guard/scripts/start.sh << 'EOF'
+#!/bin/bash
+wg-quick up wg0
+PORT=$(cat /guard/config/current_port.txt)
+/guard/hysteria2 server -c /guard/config/hysteria2/config.json
 EOF
 
 # 设置脚本权限
