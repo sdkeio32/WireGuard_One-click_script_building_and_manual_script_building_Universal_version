@@ -7,7 +7,7 @@ NC='\033[0m'
 echo -e "${GREEN}开始部署 WireGuard + Hysteria2 服务...${NC}"
 
 # 创建基础目录结构
-mkdir -p /guard/{docker,scripts,config/{wireguard,hysteria2},export/{full_proxy,split_routing}}
+mkdir -p /guard/{scripts,config/{wireguard,hysteria2},export/{full_proxy,split_routing}}
 
 # 安装基础组件
 apt update
@@ -17,14 +17,14 @@ apt install -y wireguard qrencode docker.io curl wget
 wget -O /guard/hysteria2 https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64
 chmod +x /guard/hysteria2
 
-# 创建 Dockerfile
-cat > /guard/docker/Dockerfile << 'EOF'
+# 创建 Dockerfile 直接在根目录
+cat > /guard/Dockerfile << 'EOF'
 FROM ubuntu:22.04
-RUN apt update && apt install -y wireguard qrencode iptables
-COPY . /guard/
+RUN apt update && apt install -y wireguard qrencode iptables curl
+WORKDIR /guard
+COPY . .
 RUN chmod +x /guard/hysteria2
 RUN chmod +x /guard/scripts/*
-WORKDIR /guard
 CMD ["/guard/scripts/start.sh"]
 EOF
 
@@ -73,7 +73,7 @@ Endpoint = $(curl -s ifconfig.me):${PORT}
 PersistentKeepalive = 25
 WGEOF
 
-# 生成分流代理客户端配置（更新后的IP范围）
+# 生成分流代理客户端配置
 cat > /guard/export/split_routing/client.conf << WGEOF
 [Interface]
 PrivateKey = ${CLIENT_PRIVATE_KEY}
@@ -128,6 +128,11 @@ chmod +x /guard/scripts/start.sh
 # 生成初始配置
 /guard/scripts/generate_configs.sh
 
+# 清理和重建 Docker 容器
+docker stop guards 2>/dev/null
+docker rm guards 2>/dev/null
+docker rmi guards_image 2>/dev/null
+
 # 构建和运行 Docker 容器
 cd /guard
 docker build -t guards_image .
@@ -135,6 +140,7 @@ docker run -d --name guards \
   --cap-add=NET_ADMIN \
   --network=host \
   --restart=always \
+  -v /guard:/guard \
   guards_image
 
 echo -e "${GREEN}部署完成！${NC}"
