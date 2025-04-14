@@ -75,7 +75,7 @@ EOF
 cat <<'EOF' > /root/guard/Dockerfile
 FROM ubuntu:22.04
 
-RUN apt update && apt install -y wireguard iproute2 iptables qrencode curl unzip wget net-tools
+RUN apt update && apt install -y wireguard iproute2 iptables qrencode curl unzip wget net-tools zip
 
 COPY ./config /guard/config
 COPY ./scripts /guard/scripts
