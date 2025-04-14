@@ -1,3 +1,5 @@
+================================================
+
 **WireGuard 一鍵腳本搭建和手動腳本搭建 通用版**
 推薦使用 Ubuntu 22.04
 
@@ -11,6 +13,8 @@ Telegram 用戶名： @tgbot996
 我是美籍華人，如果您有任何付款需求，可以聯繫我。
 
 僅支持 USDT 支付
+
+================================================
 
 **WireGuard One-click script building and manual script building Universal version** 
 **Recommended use Ubuntu 22.04** 
@@ -26,7 +30,7 @@ I am a Chinese American, you can contact me if you have any payment needs.
 
 Only USDT payments are supported
 
-
+================================================
 
 **WireGuard 一键脚本搭建和手动脚本搭建 通用版**
 推荐使用 Ubuntu 22.04
@@ -37,3 +41,4 @@ Telegram 用户名： @tgbot996
 我是美籍华人，如果您有任何付款需求，可以联系我。
 仅支持 USDT 支付
 
+================================================
