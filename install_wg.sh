@@ -111,7 +111,9 @@ curl -s https://core.telegram.org/resources/cidr.txt | grep -Eo '([0-9.]+/..?)' 
 # YouTube
 dig +short youtube.com | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' > "$CONFIG_GEN/youtube.txt"
 
-cat "$CONFIG_GEN/"*.txt > "$CONFIG_GEN/split_ips.txt"
+cat "$CONFIG_GEN/telegram.txt" "$CONFIG_GEN/signal.txt" "$CONFIG_GEN/youtube.txt" > "$CONFIG_GEN/split_ips.tmp"
+mv "$CONFIG_GEN/split_ips.tmp" "$CONFIG_GEN/split_ips.txt"
+
 
 # ========== 客户端配置生成 ==========
 echo "[+] 生成客户端配置..."
