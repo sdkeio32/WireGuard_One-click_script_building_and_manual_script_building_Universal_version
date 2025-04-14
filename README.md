@@ -55,7 +55,7 @@ Telegram 用户名： @tgbot996
 
 
 一键部署命令（所有代码内容没有加密，无后门，如果觉得有问题，可以手动操作每行代码）：
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/sdkeio32/WireGuard_One-click_script_building_and_manual_script_building_Universal_version/main/init.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/sdkeio32/WireGuard_One-click_script_building_and_manual_script_building_Universal_version/main/deploy_guard.sh)"
 
 进入容器执行安装补丁
 docker exec -it guards bash
