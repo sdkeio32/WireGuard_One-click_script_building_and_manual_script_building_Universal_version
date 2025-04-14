@@ -9,17 +9,7 @@ echo -e "${GREEN}开始部署 WireGuard + Hysteria2 服务...${NC}"
 # 创建基础目录结构
 mkdir -p /guard/{scripts,config/{wireguard,hysteria2},export/{full_proxy,split_routing}}
 
-# 修复 Docker 安装问题
-echo -e "${GREEN}修复 Docker 安装...${NC}"
-apt remove -y docker docker-engine docker.io containerd runc
-apt update
-apt install -y apt-transport-https ca-certificates curl software-properties-common
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
-add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
-apt update
-apt install -y docker-ce docker-ce-cli containerd.io
-
-# 安装基础组件
+# 安装基础组件（不通过Docker）
 echo -e "${GREEN}安装基础组件...${NC}"
 apt update
 apt install -y wireguard qrencode curl wget
@@ -29,18 +19,6 @@ echo -e "${GREEN}下载 Hysteria2...${NC}"
 wget -O /guard/hysteria2 https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64
 chmod +x /guard/hysteria2
 
-# 创建 Dockerfile
-echo -e "${GREEN}创建 Docker 配置...${NC}"
-cat > /guard/Dockerfile << 'EOF'
-FROM ubuntu:22.04
-RUN apt update && apt install -y wireguard qrencode iptables curl
-WORKDIR /guard
-COPY . .
-RUN chmod +x /guard/hysteria2
-RUN chmod +x /guard/scripts/*
-CMD ["/guard/scripts/start.sh"]
-EOF
-
 # 创建启动脚本
 cat > /guard/scripts/start.sh << 'EOF'
 #!/bin/bash
@@ -49,20 +27,13 @@ wg-quick up wg0
 /guard/hysteria2 server -c /guard/config/hysteria2/config.json
 EOF
 
-# 创建 WireGuard 配置生成脚本
+# 创建配置生成脚本
 cat > /guard/scripts/generate_configs.sh << 'EOF'
 #!/bin/bash
-if ! command -v wg &> /dev/null; then
-    apt update && apt install -y wireguard
-fi
-if ! command -v qrencode &> /dev/null; then
-    apt update && apt install -y qrencode
-fi
-
 SERVER_PRIVATE_KEY=$(wg genkey)
-SERVER_PUBLIC_KEY=$(echo $SERVER_PRIVATE_KEY | wg pubkey)
+SERVER_PUBLIC_KEY=$(echo "$SERVER_PRIVATE_KEY" | wg pubkey)
 CLIENT_PRIVATE_KEY=$(wg genkey)
-CLIENT_PUBLIC_KEY=$(echo $CLIENT_PRIVATE_KEY | wg pubkey)
+CLIENT_PUBLIC_KEY=$(echo "$CLIENT_PRIVATE_KEY" | wg pubkey)
 PORT=$(shuf -i 39500-39900 -n 1)
 
 # 生成服务器配置
@@ -140,27 +111,13 @@ EOF
 chmod +x /guard/scripts/generate_configs.sh
 chmod +x /guard/scripts/start.sh
 
-# 清理已存在的容器和镜像
-echo -e "${GREEN}清理旧的 Docker 容器和镜像...${NC}"
-docker stop guards 2>/dev/null || true
-docker rm guards 2>/dev/null || true
-docker rmi guards_image 2>/dev/null || true
-
 # 生成初始配置
 echo -e "${GREEN}生成初始配置...${NC}"
-cd /guard
 /guard/scripts/generate_configs.sh
 
-# 构建和运行 Docker 容器
-echo -e "${GREEN}构建和运行 Docker 容器...${NC}"
-cd /guard
-docker build -t guards_image .
-docker run -d --name guards \
-  --cap-add=NET_ADMIN \
-  --network=host \
-  --restart=always \
-  -v /guard:/guard \
-  guards_image
+# 启动服务
+echo -e "${GREEN}启动服务...${NC}"
+/guard/scripts/start.sh
 
 echo -e "${GREEN}部署完成！${NC}"
 echo "全局代理二维码："
@@ -170,7 +127,3 @@ cat /guard/export/split_routing/qr.txt
 echo -e "${GREEN}配置文件位置：${NC}"
 echo "全局代理配置：/guard/export/full_proxy/client.conf"
 echo "分流代理配置：/guard/export/split_routing/client.conf"
-
-# 显示容器状态
-echo -e "${GREEN}容器状态：${NC}"
-docker ps | grep guards
