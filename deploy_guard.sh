@@ -11,6 +11,7 @@ cleanup_services() {
     echo -e "${GREEN}清理现有服务...${NC}"
     # 停止 WireGuard
     wg-quick down wg0 2>/dev/null || true
+    ip link delete wg0 2>/dev/null || true
     
     # 停止所有 hysteria2 进程
     pkill -f hysteria2 || true
@@ -19,31 +20,11 @@ cleanup_services() {
     sleep 2
 }
 
-# 检查端口是否可用
-check_port() {
-    local port=$1
-    if netstat -tuln | grep -q ":$port "; then
-        return 1
-    fi
-    return 0
-}
-
-# 获取可用端口
-get_available_port() {
-    local port
-    while true; do
-        port=$(shuf -i 39500-39900 -n 1)
-        if check_port "$port"; then
-            echo "$port"
-            break
-        fi
-    done
-}
-
 # 清理现有服务
 cleanup_services
 
 # 创建基础目录结构
+rm -rf /guard
 mkdir -p /guard/scripts
 mkdir -p /guard/config/wireguard
 mkdir -p /guard/config/hysteria2
@@ -60,6 +41,14 @@ apt install -y wireguard qrencode curl wget net-tools
 echo -e "${GREEN}下载 Hysteria2...${NC}"
 wget -O /guard/hysteria2 https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64
 chmod +x /guard/hysteria2
+
+# 生成自签名证书
+echo -e "${GREEN}生成自签名证书...${NC}"
+mkdir -p /guard/config/cert
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout /guard/config/cert/private.key \
+    -out /guard/config/cert/certificate.crt \
+    -subj "/CN=guard.local"
 
 # 创建配置生成脚本
 cat > /guard/scripts/generate_configs.sh << 'EOF'
@@ -138,6 +127,10 @@ echo "${PORT}" > /guard/config/current_port.txt
 cat > /guard/config/hysteria2/config.json << HYEOF
 {
   "listen": ":${PORT}",
+  "tls": {
+    "cert": "/guard/config/cert/certificate.crt",
+    "key": "/guard/config/cert/private.key"
+  },
   "auth": {
     "type": "none"
   },
@@ -170,6 +163,7 @@ cat > /guard/scripts/start.sh << 'EOF'
 #!/bin/bash
 # 停止现有服务
 wg-quick down wg0 2>/dev/null || true
+ip link delete wg0 2>/dev/null || true
 pkill -f hysteria2 || true
 sleep 2
 
