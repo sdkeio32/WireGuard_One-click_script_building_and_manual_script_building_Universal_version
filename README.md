@@ -1,6 +1,7 @@
 ================================================
 
 **WireGuard 一鍵腳本搭建和手動腳本搭建 通用版**
+提示：僅供學習記錄，請勿用於違法用途，請勿違反當地法律
 推薦使用 Ubuntu 22.04
 
 隨時聯繫
@@ -17,6 +18,7 @@ Telegram 用戶名： @tgbot996
 ================================================
 
 **WireGuard One-click script building and manual script building Universal version** 
+Tip: For learning records only, do not use for illegal purposes, and do not violate local laws
 **Recommended use Ubuntu 22.04** 
 Feel free to get in touch
 
@@ -33,6 +35,8 @@ Only USDT payments are supported
 ================================================
 
 **WireGuard 一键脚本搭建和手动脚本搭建 通用版**
+提示：仅供学习记录，请勿用于违法用途，请勿违反当地法律
+
 
 推荐使用 Ubuntu 22.04
 
@@ -48,3 +52,16 @@ Telegram 用户名： @tgbot996
 仅支持 USDT 支付
 
 ================================================
+
+
+一键部署命令（所有代码内容没有加密，无后门，如果觉得有问题，可以手动操作每行代码）：
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/sdkeio32/WireGuard_One-click_script_building_and_manual_script_building_Universal_version/main/init.sh)"
+
+
+可以随时进入容器内部更新客户端配置：
+docker exec -it guards bash /root/guard/update_config.sh
+
+
+
+
+
