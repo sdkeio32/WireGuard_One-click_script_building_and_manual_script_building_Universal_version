@@ -17,9 +17,9 @@ mkdir -p "$WG_DIR" "$TOOL_DIR" "$QR_DIR" "$CONFIG_GEN"
 
 echo "[+] 安装基本依赖..."
 sudo apt update
-sudo apt install -y wireguard qrencode curl unzip iptables iproute2 jq lsb-release ca-certificates gnupg
+sudo apt install -y wireguard qrencode curl unzip iptables iproute2 jq lsb-release ca-certificates gnupg dnsutils
 
-# ========== Docker 安装（修复 containerd 冲突） ==========
+# ========== Docker 安装（兼容 containerd） ==========
 echo "[+] 安装 Docker（兼容 containerd）..."
 sudo apt remove -y docker docker-engine docker.io containerd runc || true
 sudo mkdir -p /etc/apt/keyrings
@@ -31,7 +31,7 @@ echo \
 sudo apt update
 sudo apt install -y docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin
 
-# ========== 生成 WireGuard 密钥 ==========
+# ========== WireGuard 密钥生成 ==========
 cd "$WG_DIR"
 wg genkey | tee server_private.key | wg pubkey > server_public.key
 wg genkey | tee client_private.key | wg pubkey > client_public.key
@@ -96,11 +96,21 @@ docker run -d --name hysteria2 \
   -p $HYSTERIA_PORT:$HYSTERIA_PORT/udp \
   tobyxdd/hysteria server --config /etc/hysteria/config.yaml
 
-# ========== 分流 IP 抓取 ==========
+# ========== 分流 IP 拉取（含修复） ==========
 echo "[+] 获取最新 Telegram / Signal / YouTube IP..."
+
+# Telegram
 curl -s https://core.telegram.org/resources/cidr.txt | grep -Eo '([0-9.]+/..?)' > "$CONFIG_GEN/telegram.txt"
-curl -s https://signal.org/.well-known/relayinfo.json | jq -r '.relays[].ipv4' | sed 's/$/\/32/' > "$CONFIG_GEN/signal.txt"
+
+# Signal（使用 dig 修复）
+{
+  dig +short signal.org
+  dig +short www.signal.org
+} | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' | sort -u > "$CONFIG_GEN/signal.txt"
+
+# YouTube
 dig +short youtube.com | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' > "$CONFIG_GEN/youtube.txt"
+
 cat "$CONFIG_GEN/"*.txt > "$CONFIG_GEN/split_ips.txt"
 
 # ========== 客户端配置生成 ==========
@@ -136,7 +146,7 @@ echo "[+] 生成二维码..."
 qrencode -o "$QR_DIR/qr-global.png" < "$CONFIG_GEN/wg-global.conf"
 qrencode -o "$QR_DIR/qr-split.png" < "$CONFIG_GEN/wg-split.conf"
 
-# ========== 配置打包 ==========
+# ========== ZIP 打包 ==========
 echo "[+] 打包配置..."
 cd "$CONFIG_GEN"
 zip -r "$HOME/guard/client-configs.zip" wg-*.conf
