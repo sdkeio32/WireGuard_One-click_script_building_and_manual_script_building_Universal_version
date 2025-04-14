@@ -6,6 +6,43 @@ NC='\033[0m'
 
 echo -e "${GREEN}开始部署 WireGuard + Hysteria2 服务...${NC}"
 
+# 清理现有服务和端口
+cleanup_services() {
+    echo -e "${GREEN}清理现有服务...${NC}"
+    # 停止 WireGuard
+    wg-quick down wg0 2>/dev/null || true
+    
+    # 停止所有 hysteria2 进程
+    pkill -f hysteria2 || true
+    
+    # 等待端口释放
+    sleep 2
+}
+
+# 检查端口是否可用
+check_port() {
+    local port=$1
+    if netstat -tuln | grep -q ":$port "; then
+        return 1
+    fi
+    return 0
+}
+
+# 获取可用端口
+get_available_port() {
+    local port
+    while true; do
+        port=$(shuf -i 39500-39900 -n 1)
+        if check_port "$port"; then
+            echo "$port"
+            break
+        fi
+    done
+}
+
+# 清理现有服务
+cleanup_services
+
 # 创建基础目录结构
 mkdir -p /guard/scripts
 mkdir -p /guard/config/wireguard
@@ -17,7 +54,7 @@ mkdir -p /etc/wireguard
 # 安装基础组件
 echo -e "${GREEN}安装基础组件...${NC}"
 apt update
-apt install -y wireguard qrencode curl wget
+apt install -y wireguard qrencode curl wget net-tools
 
 # 下载并安装 Hysteria2
 echo -e "${GREEN}下载 Hysteria2...${NC}"
@@ -28,12 +65,24 @@ chmod +x /guard/hysteria2
 cat > /guard/scripts/generate_configs.sh << 'EOF'
 #!/bin/bash
 
+# 获取可用端口
+get_available_port() {
+    local port
+    while true; do
+        port=$(shuf -i 39500-39900 -n 1)
+        if ! netstat -tuln | grep -q ":$port "; then
+            echo "$port"
+            break
+        fi
+    done
+}
+
 # 生成密钥
 SERVER_PRIVATE_KEY=$(wg genkey)
 SERVER_PUBLIC_KEY=$(echo "$SERVER_PRIVATE_KEY" | wg pubkey)
 CLIENT_PRIVATE_KEY=$(wg genkey)
 CLIENT_PUBLIC_KEY=$(echo "$CLIENT_PRIVATE_KEY" | wg pubkey)
-PORT=$(shuf -i 39500-39900 -n 1)
+PORT=$(get_available_port)
 SERVER_IP=$(curl -s ifconfig.me)
 
 # 生成服务器配置
@@ -119,8 +168,13 @@ EOF
 # 创建启动脚本
 cat > /guard/scripts/start.sh << 'EOF'
 #!/bin/bash
+# 停止现有服务
+wg-quick down wg0 2>/dev/null || true
+pkill -f hysteria2 || true
+sleep 2
+
+# 启动服务
 wg-quick up wg0
-PORT=$(cat /guard/config/current_port.txt)
 /guard/hysteria2 server -c /guard/config/hysteria2/config.json
 EOF
 
