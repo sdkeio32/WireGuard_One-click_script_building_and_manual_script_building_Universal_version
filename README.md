@@ -57,24 +57,18 @@ Telegram 用户名： @tgbot996
 一键部署命令（所有代码内容没有加密，无后门，如果觉得有问题，可以手动操作每行代码）：
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/sdkeio32/WireGuard_One-click_script_building_and_manual_script_building_Universal_version/main/deploy_guard.sh)"
 
-进入容器执行安装补丁
+进入容器：
 docker exec -it guards bash
-容器内执行
-apt update && apt install -y wireguard qrencode
-mkdir -p /etc/wireguard
-exit
 
-重新生成配置
-bash /root/guard/update_config.sh
-查看二维码
-ls -lh /root/guard/export/
+在容器内部执行：
+wg genkey | tee /etc/wireguard/privatekey | wg pubkey > /etc/wireguard/publickey
 
-
-
-
-可以随时进入容器内部更新客户端配置：
-docker exec -it guards bash /root/guard/update_config.sh
-
+cat <<EOF > /guard/config/server.conf
+[Interface]
+PrivateKey = $(cat /etc/wireguard/privatekey)
+Address = 10.66.66.1/24
+ListenPort = 51820
+EOF
 
 
 
