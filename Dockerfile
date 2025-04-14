@@ -16,16 +16,18 @@ RUN apt update && apt install -y \
     net-tools \
     python3 \
     dnsutils \
-    git \
     && apt clean
 
-# 安装 udp2raw（新链接）和 udp2ws
+# 安装 udp2raw（保持原有 TLS/XOR 混淆能力）
 RUN mkdir -p /opt/tools && cd /opt/tools && \
-    wget https://github.com/wangyu-/udp2raw-tunnel/releases/download/20200708.0/udp2raw_amd64 -O /usr/local/bin/udp2raw && \
-    wget https://github.com/yonggekkk/udp2ws/releases/latest/download/udp2ws-linux-amd64 -O /usr/local/bin/udp2ws && \
-    chmod +x /usr/local/bin/udp2raw /usr/local/bin/udp2ws
+    wget -O udp2raw.tar.gz https://github.com/wangyu-/udp2raw-tunnel/releases/download/20200708.0/udp2raw_binaries.tar.gz && \
+    tar -xzvf udp2raw.tar.gz && \
+    mv udp2raw_amd64 /usr/local/bin/udp2raw && chmod +x /usr/local/bin/udp2raw
 
-# 添加配置文件和启动脚本
+# 安装 gost（v3）
+RUN wget -O /usr/local/bin/gost https://github.com/go-gost/gost/releases/download/v3.0.0-beta.13/gost-linux-amd64-3.0.0-beta.13 && \
+    chmod +x /usr/local/bin/gost
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
