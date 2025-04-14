@@ -73,7 +73,7 @@ Endpoint = $(curl -s ifconfig.me):${PORT}
 PersistentKeepalive = 25
 WGEOF
 
-# 生成分流代理客户端配置
+# 生成分流代理客户端配置（更新后的IP范围）
 cat > /guard/export/split_routing/client.conf << WGEOF
 [Interface]
 PrivateKey = ${CLIENT_PRIVATE_KEY}
@@ -82,7 +82,12 @@ DNS = 8.8.8.8
 
 [Peer]
 PublicKey = ${SERVER_PUBLIC_KEY}
-AllowedIPs = 149.154.160.0/20, 91.108.4.0/22, 91.108.56.0/22, 109.239.140.0/24, 172.217.0.0/16
+# Telegram IPs
+AllowedIPs = 149.154.160.0/20, 91.108.4.0/22, 91.108.8.0/22, 91.108.12.0/22, 91.108.16.0/22, 91.108.20.0/22, 91.108.56.0/22, 149.154.164.0/22, 149.154.168.0/22, 149.154.172.0/22, \
+# YouTube and Google IPs
+172.217.0.0/16, 108.177.0.0/17, 142.250.0.0/15, 172.253.0.0/16, 173.194.0.0/16, 216.58.192.0/19, 216.239.32.0/19, 74.125.0.0/16, \
+# Signal IPs
+24.199.123.28/32, 52.52.62.137/32, 52.218.48.0/20, 34.248.0.0/13, 35.157.0.0/16, 35.186.0.0/17, 35.192.0.0/14, 35.224.0.0/14, 35.228.0.0/14
 Endpoint = $(curl -s ifconfig.me):${PORT}
 PersistentKeepalive = 25
 WGEOF
@@ -116,6 +121,13 @@ cat > /guard/config/hysteria2/config.json << EOF
 }
 EOF
 
+# 设置脚本权限
+chmod +x /guard/scripts/generate_configs.sh
+chmod +x /guard/scripts/start.sh
+
+# 生成初始配置
+/guard/scripts/generate_configs.sh
+
 # 构建和运行 Docker 容器
 cd /guard
 docker build -t guards_image .
@@ -128,5 +140,8 @@ docker run -d --name guards \
 echo -e "${GREEN}部署完成！${NC}"
 echo "全局代理二维码："
 cat /guard/export/full_proxy/qr.txt
-echo "分流代理二维码："
+echo "分流代理二维码（仅 Telegram、Signal 和 YouTube）："
 cat /guard/export/split_routing/qr.txt
+echo -e "${GREEN}配置文件位置：${NC}"
+echo "全局代理配置：/guard/export/full_proxy/client.conf"
+echo "分流代理配置：/guard/export/split_routing/client.conf"
