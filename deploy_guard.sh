@@ -9,7 +9,7 @@ echo -e "${GREEN}开始部署 WireGuard + Hysteria2 服务...${NC}"
 # 创建基础目录结构
 mkdir -p /guard/{scripts,config/{wireguard,hysteria2},export/{full_proxy,split_routing}}
 
-# 安装基础组件（不通过Docker）
+# 安装基础组件
 echo -e "${GREEN}安装基础组件...${NC}"
 apt update
 apt install -y wireguard qrencode curl wget
@@ -35,6 +35,7 @@ SERVER_PUBLIC_KEY=$(echo "$SERVER_PRIVATE_KEY" | wg pubkey)
 CLIENT_PRIVATE_KEY=$(wg genkey)
 CLIENT_PUBLIC_KEY=$(echo "$CLIENT_PRIVATE_KEY" | wg pubkey)
 PORT=$(shuf -i 39500-39900 -n 1)
+SERVER_IP=$(curl -s ifconfig.me)
 
 # 生成服务器配置
 cat > /guard/config/wireguard/wg0.conf << WGEOF
@@ -60,7 +61,7 @@ DNS = 8.8.8.8
 [Peer]
 PublicKey = ${SERVER_PUBLIC_KEY}
 AllowedIPs = 0.0.0.0/0
-Endpoint = $(curl -s ifconfig.me):${PORT}
+Endpoint = ${SERVER_IP}:${PORT}
 PersistentKeepalive = 25
 WGEOF
 
@@ -74,13 +75,19 @@ DNS = 8.8.8.8
 [Peer]
 PublicKey = ${SERVER_PUBLIC_KEY}
 AllowedIPs = 149.154.160.0/20,91.108.4.0/22,91.108.8.0/22,91.108.12.0/22,91.108.16.0/22,91.108.20.0/22,91.108.56.0/22,149.154.164.0/22,149.154.168.0/22,149.154.172.0/22,172.217.0.0/16,108.177.0.0/17,142.250.0.0/15,172.253.0.0/16,173.194.0.0/16,216.58.192.0/19,216.239.32.0/19,74.125.0.0/16,24.199.123.28/32,52.52.62.137/32,52.218.48.0/20,34.248.0.0/13,35.157.0.0/16,35.186.0.0/17,35.192.0.0/14,35.224.0.0/14,35.228.0.0/14
-Endpoint = $(curl -s ifconfig.me):${PORT}
+Endpoint = ${SERVER_IP}:${PORT}
 PersistentKeepalive = 25
 WGEOF
 
-# 生成二维码
-qrencode -t ansiutf8 < /guard/export/full_proxy/client.conf > /guard/export/full_proxy/qr.txt
-qrencode -t ansiutf8 < /guard/export/split_routing/client.conf > /guard/export/split_routing/qr.txt
+# 生成全局代理二维码
+echo -n "wg://$(base64 -w 0 < /guard/export/full_proxy/client.conf)" | qrencode -t ansiutf8 > /guard/export/full_proxy/qr.txt
+
+# 生成分流代理二维码
+echo -n "wg://$(base64 -w 0 < /guard/export/split_routing/client.conf)" | qrencode -t ansiutf8 > /guard/export/split_routing/qr.txt
+
+# 同时生成配置文件的二维码（直接配置内容）
+qrencode -t ansiutf8 < /guard/export/full_proxy/client.conf > /guard/export/full_proxy/qr_direct.txt
+qrencode -t ansiutf8 < /guard/export/split_routing/client.conf > /guard/export/split_routing/qr_direct.txt
 EOF
 
 # 创建 Hysteria2 配置
@@ -120,10 +127,14 @@ echo -e "${GREEN}启动服务...${NC}"
 /guard/scripts/start.sh
 
 echo -e "${GREEN}部署完成！${NC}"
-echo "全局代理二维码："
+echo -e "${GREEN}全局代理二维码（方式1 - wg://格式）：${NC}"
 cat /guard/export/full_proxy/qr.txt
-echo "分流代理二维码（仅 Telegram、Signal 和 YouTube）："
+echo -e "${GREEN}全局代理二维码（方式2 - 直接配置）：${NC}"
+cat /guard/export/full_proxy/qr_direct.txt
+echo -e "${GREEN}分流代理二维码（方式1 - wg://格式）：${NC}"
 cat /guard/export/split_routing/qr.txt
+echo -e "${GREEN}分流代理二维码（方式2 - 直接配置）：${NC}"
+cat /guard/export/split_routing/qr_direct.txt
 echo -e "${GREEN}配置文件位置：${NC}"
 echo "全局代理配置：/guard/export/full_proxy/client.conf"
 echo "分流代理配置：/guard/export/split_routing/client.conf"
