@@ -1,139 +1,143 @@
 #!/bin/bash
+
 set -e
 
-WG_DIR="$HOME/guard/wireguard"
-TOOL_DIR="$HOME/guard/tools"
-CONFIG_DIR="$HOME/guard/configs"
-QR_DIR="$HOME/guard/qrcode"
-mkdir -p "$WG_DIR" "$TOOL_DIR" "$CONFIG_DIR" "$QR_DIR"
+echo "🔧 开始一键安装 WireGuard + Hysteria2 (非Docker 版)"
 
-SERVER_IP=$(curl -s https://api.ipify.org)
-WG_PORT=$(shuf -i 39500-39510 -n 1)
-HYS_PORT=$(shuf -i 39511-39520 -n 1)
+WG_PORT=$(shuf -i 39500-39509 -n 1)
+HYSTERIA_PORT=$(shuf -i 39510-39519 -n 1)
+WG_INTERFACE="wg0"
+WG_DIR="/etc/wireguard"
+TLS_DIR="/etc/hysteria"
+CONFIG_PATH="/etc/hysteria/config.yaml"
+CLIENT_CONFIG_DIR="$HOME/guard/configs"
+QRCODE_DIR="$HOME/guard/qrcode"
+
+mkdir -p "$WG_DIR" "$TLS_DIR" "$CLIENT_CONFIG_DIR" "$QRCODE_DIR"
 
 echo "[+] 安装依赖..."
-apt update && apt install -y wireguard qrencode curl iptables unzip jq dnsutils
+apt update -y
+apt install -y wireguard qrencode curl unzip jq iproute2 iptables dnsutils
 
 echo "[+] 开启 IPv4 转发..."
-echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-forward.conf
-sysctl -p /etc/sysctl.d/99-forward.conf
+sysctl -w net.ipv4.ip_forward=1
+echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-wg.conf
+sysctl --system > /dev/null
 
-echo "[+] 安装 Hysteria2（非 Docker）..."
+echo "[+] 安装 Hysteria2 (非 Docker)..."
 bash <(curl -fsSL https://get.hy2.sh/)
 
-echo "[+] 生成 WireGuard 密钥..."
-wg genkey | tee "$WG_DIR/server.key" | wg pubkey > "$WG_DIR/server.pub"
-wg genkey | tee "$WG_DIR/client.key" | wg pubkey > "$WG_DIR/client.pub"
+echo "[+] 创建 WireGuard 密钥对..."
+[[ -f "$WG_DIR/private.key" ]] || wg genkey | tee "$WG_DIR/private.key" | wg pubkey > "$WG_DIR/public.key"
 
-SERVER_PRIV=$(cat "$WG_DIR/server.key")
-SERVER_PUB=$(cat "$WG_DIR/server.pub")
-CLIENT_PRIV=$(cat "$WG_DIR/client.key")
-CLIENT_PUB=$(cat "$WG_DIR/client.pub")
+PRIVATE_KEY=$(cat "$WG_DIR/private.key")
+PUBLIC_KEY=$(cat "$WG_DIR/public.key")
 
-DEFAULT_IFACE=$(ip route | grep default | awk '{print $5}')
-WG_CONF="/etc/wireguard/wg0.conf"
-
-echo "[+] 配置 WireGuard..."
-cat > "$WG_CONF" <<EOF
+echo "[+] 写入 WireGuard 配置..."
+cat > "$WG_DIR/$WG_INTERFACE.conf" <<EOF
 [Interface]
-PrivateKey = $SERVER_PRIV
+PrivateKey = $PRIVATE_KEY
 Address = 10.66.66.1/24
 ListenPort = $WG_PORT
-PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -s 10.66.66.0/24 -o $DEFAULT_IFACE -j MASQUERADE
-PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -s 10.66.66.0/24 -o $DEFAULT_IFACE -j MASQUERADE
+MTU = 1420
+PostUp = iptables -A FORWARD -i $WG_INTERFACE -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i $WG_INTERFACE -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
 
 [Peer]
-PublicKey = $CLIENT_PUB
+PublicKey = xxx-client-key
 AllowedIPs = 10.66.66.2/32
 EOF
 
-echo "[+] 启动 WireGuard..."
-ip link show wg0 >/dev/null 2>&1 && ip link del wg0 || true
-systemctl enable wg-quick@wg0
-systemctl restart wg-quick@wg0
+echo "[+] 启动 WireGuard 接口..."
+ip link show $WG_INTERFACE &>/dev/null && wg-quick down $WG_INTERFACE
+systemctl enable wg-quick@$WG_INTERFACE
+systemctl start wg-quick@$WG_INTERFACE
 
 echo "[+] 生成自签 TLS 证书..."
-mkdir -p /etc/hysteria
-openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
-  -keyout /etc/hysteria/key.pem \
-  -out /etc/hysteria/cert.pem \
-  -subj "/CN=spotify.com"
+openssl req -x509 -newkey rsa:2048 -sha256 -nodes \
+  -keyout "$TLS_DIR/key.pem" -out "$TLS_DIR/cert.pem" -days 3650 \
+  -subj "/CN=hy2.local"
 
-echo "[+] 写入 Hysteria2 配置..."
-cat > /etc/hysteria/config.yaml <<EOF
-listen: :$HYS_PORT
+echo "[+] 生成 Hysteria2 配置..."
+cat > "$CONFIG_PATH" <<EOF
+listen: :$HYSTERIA_PORT
+
 tls:
-  cert: /etc/hysteria/cert.pem
-  key: /etc/hysteria/key.pem
+  cert: $TLS_DIR/cert.pem
+  key: $TLS_DIR/key.pem
+
 auth:
-  mode: disabled
+  type: disabled
+
 forward:
   type: wireguard
   server: 127.0.0.1:$WG_PORT
+  localAddress: 10.66.66.2/32
+  privateKey: $PRIVATE_KEY
 EOF
 
-systemctl restart hysteria-server
+echo "[+] 创建 Hysteria2 systemd 服务..."
+cat > /etc/systemd/system/hysteria-server.service <<EOF
+[Unit]
+Description=Hysteria Server Service (config.yaml)
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/hysteria server --config $CONFIG_PATH
+Restart=on-failure
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reexec
 systemctl enable hysteria-server
+systemctl restart hysteria-server
 
-echo "[+] 获取 Telegram / Signal / YouTube IP 分流段..."
-TMP_IPS=$(mktemp)
+echo "[+] 获取 Telegram / Signal / YouTube IP..."
+SPLIT_IPS="$CLIENT_CONFIG_DIR/split_ips.txt"
+> "$SPLIT_IPS"
 
-# Telegram
-curl -s https://core.telegram.org/resources/cidr.txt | grep -Eo '[0-9.]+/[0-9]+' > "$TMP_IPS"
+for domain in telegram.org signal.org youtube.com; do
+  dig +short $domain | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' >> "$SPLIT_IPS"
+done
 
-# Signal
-{
-  dig +short signal.org
-  dig +short www.signal.org
-} | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' >> "$TMP_IPS"
-
-# YouTube
-dig +short youtube.com | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' >> "$TMP_IPS"
-
-mv "$TMP_IPS" "$CONFIG_DIR/split_ips.txt"
-
-echo "[+] 写入客户端配置..."
-
-cat > "$CONFIG_DIR/wg-global.conf" <<EOF
+echo "[+] 生成客户端配置文件..."
+cat > "$CLIENT_CONFIG_DIR/wg-global.conf" <<EOF
 [Interface]
-PrivateKey = $CLIENT_PRIV
+PrivateKey = xxx-client-private-key
 Address = 10.66.66.2/32
 DNS = 1.1.1.1
 
 [Peer]
-PublicKey = $SERVER_PUB
-Endpoint = $SERVER_IP:$HYS_PORT
+PublicKey = $PUBLIC_KEY
+Endpoint = your_domain_or_ip:$HYSTERIA_PORT
 AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 25
 EOF
 
-cat > "$CONFIG_DIR/wg-split.conf" <<EOF
+cat > "$CLIENT_CONFIG_DIR/wg-split.conf" <<EOF
 [Interface]
-PrivateKey = $CLIENT_PRIV
+PrivateKey = xxx-client-private-key
 Address = 10.66.66.2/32
 DNS = 1.1.1.1
 
 [Peer]
-PublicKey = $SERVER_PUB
-Endpoint = $SERVER_IP:$HYS_PORT
-AllowedIPs = $(paste -sd "," "$CONFIG_DIR/split_ips.txt")
-PersistentKeepalive = 25
+PublicKey = $PUBLIC_KEY
+Endpoint = your_domain_or_ip:$HYSTERIA_PORT
+AllowedIPs = $(paste -sd, $SPLIT_IPS)
 EOF
 
 echo "[+] 生成二维码..."
-qrencode -o "$QR_DIR/qr-global.png" < "$CONFIG_DIR/wg-global.conf"
-qrencode -o "$QR_DIR/qr-split.png" < "$CONFIG_DIR/wg-split.conf"
+qrencode -o "$QRCODE_DIR/qr-global.png" < "$CLIENT_CONFIG_DIR/wg-global.conf"
+qrencode -o "$QRCODE_DIR/qr-split.png" < "$CLIENT_CONFIG_DIR/wg-split.conf"
 
-echo "[+] 打包配置..."
-cd "$CONFIG_DIR"
-zip -q -r "$HOME/guard/client-configs.zip" wg-*.conf
+echo "[+] 打包客户端配置..."
+zip -j "$CLIENT_CONFIG_DIR/client-configs.zip" "$CLIENT_CONFIG_DIR"/*.conf "$QRCODE_DIR"/*.png
 
-echo -e "\n✅ 安装完成！"
-echo "📄 配置文件路径："
-echo "   $CONFIG_DIR/wg-global.conf"
-echo "   $CONFIG_DIR/wg-split.conf"
-echo "📱 二维码："
-echo "   $QR_DIR/qr-global.png"
-echo "   $QR_DIR/qr-split.png"
-echo "📦 ZIP 文件："
-echo "   $HOME/guard/client-configs.zip"
+echo "✅ 安装完成！"
+echo "📁 配置文件目录: $CLIENT_CONFIG_DIR"
+echo "📱 二维码文件：$QRCODE_DIR"
+echo "🚀 建议运行诊断脚本确认状态："
+echo ""
+echo "   bash <(curl -fsSL https://raw.githubusercontent.com/sdkeio32/WireGuard_One-click_script_building_and_manual_script_building_Universal_version/main/diagnose.sh)"
