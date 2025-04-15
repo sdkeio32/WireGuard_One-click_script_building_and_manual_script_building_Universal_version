@@ -1,85 +1,64 @@
 #!/bin/bash
 set -e
 
-# 自动获取公网 IP
-SERVER_IP=$(curl -s https://api.ipify.org)
-
-# 路径定义
 WG_DIR="$HOME/guard/wireguard"
 TOOL_DIR="$HOME/guard/tools"
+CONFIG_DIR="$HOME/guard/configs"
 QR_DIR="$HOME/guard/qrcode"
-CONFIG_GEN="$HOME/guard/configs"
-HYSTERIA_PORT_START=39511
-HYSTERIA_PORT_END=39520
-WG_PORT_START=39500
-WG_PORT_END=39510
+SERVER_IP=$(curl -s https://api.ipify.org)
+WG_PORT=$(shuf -i 39500-39510 -n 1)
+HYS_PORT=$(shuf -i 39511-39520 -n 1)
 WG_IFACE="wg0"
 
-mkdir -p "$WG_DIR" "$TOOL_DIR" "$QR_DIR" "$CONFIG_GEN"
+mkdir -p "$WG_DIR" "$TOOL_DIR" "$CONFIG_DIR" "$QR_DIR"
 
 echo "[+] 安装依赖..."
-sudo apt update
-sudo apt install -y wireguard qrencode curl unzip iptables iproute2 jq lsb-release ca-certificates gnupg dnsutils
+apt update && apt install -y wireguard qrencode curl iptables unzip jq dnsutils
 
-# 安装 Docker
-echo "[+] 安装 Docker..."
-sudo apt remove -y docker docker-engine docker.io containerd runc || true
-sudo mkdir -p /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-  $(lsb_release -cs) stable" | \
-  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-sudo apt update
-sudo apt install -y docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin
+echo "[+] 开启 IPv4 转发..."
+echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-forward.conf
+sysctl -p /etc/sysctl.d/99-forward.conf
 
-# WireGuard 密钥生成
-cd "$WG_DIR"
-wg genkey | tee server_private.key | wg pubkey > server_public.key
-wg genkey | tee client_private.key | wg pubkey > client_public.key
-SERVER_PRIV_KEY=$(cat server_private.key)
-SERVER_PUB_KEY=$(cat server_public.key)
-CLIENT_PRIV_KEY=$(cat client_private.key)
-CLIENT_PUB_KEY=$(cat client_public.key)
+echo "[+] 安装 Hysteria2（非 Docker）..."
+bash <(curl -fsSL https://get.hy2.sh/)
 
-# 随机端口
-WG_PORT=$(shuf -i ${WG_PORT_START}-${WG_PORT_END} -n 1)
-HYSTERIA_PORT=$(shuf -i ${HYSTERIA_PORT_START}-${HYSTERIA_PORT_END} -n 1)
+echo "[+] 生成 WireGuard 密钥对..."
+wg genkey | tee "$WG_DIR/server.key" | wg pubkey > "$WG_DIR/server.pub"
+wg genkey | tee "$WG_DIR/client.key" | wg pubkey > "$WG_DIR/client.pub"
 
-echo "[+] WireGuard 端口: $WG_PORT"
-echo "[+] Hysteria2 端口: $HYSTERIA_PORT"
+SERVER_PRIV=$(cat "$WG_DIR/server.key")
+SERVER_PUB=$(cat "$WG_DIR/server.pub")
+CLIENT_PRIV=$(cat "$WG_DIR/client.key")
+CLIENT_PUB=$(cat "$WG_DIR/client.pub")
 
-# 开启 IPv4 转发
-echo "[+] 启用 IPv4 转发..."
-echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
-sudo sysctl -p
-
-# WireGuard 配置
+echo "[+] 配置 WireGuard..."
 cat > "$WG_DIR/wg0.conf" <<EOF
 [Interface]
-PrivateKey = $SERVER_PRIV_KEY
-Address = 10.10.0.1/24
+PrivateKey = $SERVER_PRIV
+Address = 10.66.66.1/24
 ListenPort = $WG_PORT
-PostUp = iptables -A FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -D POSTROUTING -s 10.10.0.0/24 -o eth0 -j MASQUERADE
+PostUp = iptables -A FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -A POSTROUTING -s 10.66.66.0/24 -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -D POSTROUTING -s 10.66.66.0/24 -o eth0 -j MASQUERADE
 
 [Peer]
-PublicKey = $CLIENT_PUB_KEY
-AllowedIPs = 10.10.0.2/32
+PublicKey = $CLIENT_PUB
+AllowedIPs = 10.66.66.2/32
 EOF
 
-sudo wg-quick down "$WG_IFACE" 2>/dev/null || true
-sudo wg-quick up "$WG_IFACE"
+systemctl stop wg-quick@$WG_IFACE 2>/dev/null || true
+systemctl start wg-quick@$WG_IFACE
+systemctl enable wg-quick@$WG_IFACE
 
-# TLS 证书
-echo "[+] 生成自签 TLS 证书..."
-mkdir -p "$TOOL_DIR/tls"
-openssl req -x509 -newkey rsa:2048 -keyout "$TOOL_DIR/tls/key.pem" -out "$TOOL_DIR/tls/cert.pem" -days 365 -nodes -subj "/CN=spotify.com"
+echo "[+] 生成自签名 TLS 证书..."
+mkdir -p /etc/hysteria
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout /etc/hysteria/key.pem \
+  -out /etc/hysteria/cert.pem \
+  -subj "/CN=spotify.com"
 
-# Hysteria2 配置
 echo "[+] 生成 Hysteria2 配置..."
-cat > "$TOOL_DIR/hysteria2-config.yaml" <<EOF
-listen: :$HYSTERIA_PORT
+cat > /etc/hysteria/config.yaml <<EOF
+listen: :$HYS_PORT
 tls:
   cert: /etc/hysteria/cert.pem
   key: /etc/hysteria/key.pem
@@ -91,76 +70,58 @@ forward:
   password: ""
 EOF
 
-# 启动容器
-docker stop hysteria2 2>/dev/null || true
-docker rm hysteria2 2>/dev/null || true
-docker run -d --name hysteria2 \
-  -v "$TOOL_DIR/tls:/etc/hysteria" \
-  -v "$TOOL_DIR/hysteria2-config.yaml:/etc/hysteria/config.yaml" \
-  -p $HYSTERIA_PORT:$HYSTERIA_PORT/udp \
-  tobyxdd/hysteria server --config /etc/hysteria/config.yaml
+echo "[+] 重启 Hysteria2 服务..."
+systemctl restart hysteria-server
+systemctl enable hysteria-server
 
-# 等待启动 & 检查状态
-sleep 3
-if ! docker logs hysteria2 2>&1 | grep -q "server started"; then
-  echo "❌ Hysteria2 启动失败，请检查配置或端口占用！"
-  exit 1
-fi
-
-# 拉取 IP 分流
-echo "[+] 获取分流目标 IP..."
-curl -s https://core.telegram.org/resources/cidr.txt | grep -Eo '([0-9.]+/..?)' > "$CONFIG_GEN/telegram.txt"
+echo "[+] 获取 Telegram / Signal / YouTube 分流 IP..."
+curl -s https://core.telegram.org/resources/cidr.txt | grep -Eo '[0-9.]+/[0-9]+' > "$CONFIG_DIR/telegram.txt"
 {
   dig +short signal.org
   dig +short www.signal.org
-} | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' | sort -u > "$CONFIG_GEN/signal.txt"
-dig +short youtube.com | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' > "$CONFIG_GEN/youtube.txt"
+} | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' > "$CONFIG_DIR/signal.txt"
+dig +short youtube.com | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' > "$CONFIG_DIR/youtube.txt"
 
-cat "$CONFIG_GEN/telegram.txt" "$CONFIG_GEN/signal.txt" "$CONFIG_GEN/youtube.txt" > "$CONFIG_GEN/split_ips.tmp"
-mv "$CONFIG_GEN/split_ips.tmp" "$CONFIG_GEN/split_ips.txt"
+cat "$CONFIG_DIR/"*.txt > "$CONFIG_DIR/split_ips.txt"
 
-# 客户端配置文件
-cat > "$CONFIG_GEN/wg-global.conf" <<EOF
+echo "[+] 生成客户端配置文件..."
+cat > "$CONFIG_DIR/wg-global.conf" <<EOF
 [Interface]
-PrivateKey = $CLIENT_PRIV_KEY
-Address = 10.10.0.2/32
+PrivateKey = $CLIENT_PRIV
+Address = 10.66.66.2/32
 DNS = 1.1.1.1
 
 [Peer]
-PublicKey = $SERVER_PUB_KEY
-Endpoint = $SERVER_IP:$HYSTERIA_PORT
+PublicKey = $SERVER_PUB
+Endpoint = $SERVER_IP:$HYS_PORT
 AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 EOF
 
-cat > "$CONFIG_GEN/wg-split.conf" <<EOF
+cat > "$CONFIG_DIR/wg-split.conf" <<EOF
 [Interface]
-PrivateKey = $CLIENT_PRIV_KEY
-Address = 10.10.0.2/32
+PrivateKey = $CLIENT_PRIV
+Address = 10.66.66.2/32
 DNS = 1.1.1.1
 
 [Peer]
-PublicKey = $SERVER_PUB_KEY
-Endpoint = $SERVER_IP:$HYSTERIA_PORT
-AllowedIPs = $(paste -sd "," "$CONFIG_GEN/split_ips.txt")
+PublicKey = $SERVER_PUB
+Endpoint = $SERVER_IP:$HYS_PORT
+AllowedIPs = $(paste -sd "," "$CONFIG_DIR/split_ips.txt")
 PersistentKeepalive = 25
 EOF
 
-# 二维码输出
-qrencode -o "$QR_DIR/qr-global.png" < "$CONFIG_GEN/wg-global.conf"
-qrencode -o "$QR_DIR/qr-split.png" < "$CONFIG_GEN/wg-split.conf"
+qrencode -o "$QR_DIR/qr-global.png" < "$CONFIG_DIR/wg-global.conf"
+qrencode -o "$QR_DIR/qr-split.png" < "$CONFIG_DIR/wg-split.conf"
 
-# 打包
-cd "$CONFIG_GEN"
+cd "$CONFIG_DIR"
 zip -r "$HOME/guard/client-configs.zip" wg-*.conf
-cp "$QR_DIR"/*.png "$HOME/guard/"
 
-# 完成提示
 echo -e "\n✅ 安装完成！"
-echo "📄 客户端配置："
-echo "   $CONFIG_GEN/wg-global.conf"
-echo "   $CONFIG_GEN/wg-split.conf"
-echo "📱 二维码文件："
+echo "📄 配置文件路径："
+echo "   $CONFIG_DIR/wg-global.conf"
+echo "   $CONFIG_DIR/wg-split.conf"
+echo "📱 二维码："
 echo "   $QR_DIR/qr-global.png"
 echo "   $QR_DIR/qr-split.png"
-echo "📦 打包配置 ZIP：$HOME/guard/client-configs.zip"
+echo "📦 打包 zip：$HOME/guard/client-configs.zip"
