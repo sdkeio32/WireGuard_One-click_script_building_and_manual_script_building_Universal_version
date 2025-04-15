@@ -31,25 +31,28 @@ SERVER_PUB=$(cat "$WG_DIR/server.pub")
 CLIENT_PRIV=$(cat "$WG_DIR/client.key")
 CLIENT_PUB=$(cat "$WG_DIR/client.pub")
 
+DEFAULT_IFACE=$(ip route | grep default | awk '{print $5}')
+
 echo "[+] 配置 WireGuard..."
 cat > "$WG_DIR/wg0.conf" <<EOF
 [Interface]
 PrivateKey = $SERVER_PRIV
 Address = 10.66.66.1/24
 ListenPort = $WG_PORT
-PostUp = iptables -A FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -A POSTROUTING -s 10.66.66.0/24 -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -D POSTROUTING -s 10.66.66.0/24 -o eth0 -j MASQUERADE
+PostUp = iptables -A FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -A POSTROUTING -s 10.66.66.0/24 -o $DEFAULT_IFACE -j MASQUERADE
+PostDown = iptables -D FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -D POSTROUTING -s 10.66.66.0/24 -o $DEFAULT_IFACE -j MASQUERADE
 
 [Peer]
 PublicKey = $CLIENT_PUB
 AllowedIPs = 10.66.66.2/32
 EOF
 
-systemctl stop wg-quick@$WG_IFACE 2>/dev/null || true
-systemctl start wg-quick@$WG_IFACE
-systemctl enable wg-quick@$WG_IFACE
+echo "[+] 启动 WireGuard 接口..."
+cp "$WG_DIR/wg0.conf" /etc/wireguard/wg0.conf
+systemctl enable wg-quick@wg0
+systemctl start wg-quick@wg0
 
-echo "[+] 生成自签名 TLS 证书..."
+echo "[+] 生成自签 TLS 证书..."
 mkdir -p /etc/hysteria
 openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
   -keyout /etc/hysteria/key.pem \
@@ -70,7 +73,7 @@ forward:
   password: ""
 EOF
 
-echo "[+] 重启 Hysteria2 服务..."
+echo "[+] 启动 Hysteria2..."
 systemctl restart hysteria-server
 systemctl enable hysteria-server
 
