@@ -21,8 +21,8 @@ echo "[+] 安装基本依赖..."
 sudo apt update
 sudo apt install -y wireguard qrencode curl unzip iptables iproute2 jq lsb-release ca-certificates gnupg dnsutils
 
-# ========== Docker 安装（兼容 containerd） ==========
-echo "[+] 安装 Docker（兼容 containerd）..."
+# ========== Docker 安装 ==========
+echo "[+] 安装 Docker..."
 sudo apt remove -y docker docker-engine docker.io containerd runc || true
 sudo mkdir -p /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
@@ -70,7 +70,7 @@ AllowedIPs = 10.10.0.2/32
 EOF
 
 sudo wg-quick down "$WG_IFACE" 2>/dev/null || true
-sudo wg-quick up "$WG_DIR/wg0.conf"
+sudo wg-quick up "$WG_IFACE"
 
 # ========== TLS 自签证书 ==========
 echo "[+] 生成自签 TLS 证书..."
@@ -84,9 +84,6 @@ listen: :$HYSTERIA_PORT
 tls:
   cert: /etc/hysteria/cert.pem
   key: /etc/hysteria/key.pem
-obfs:
-  type: tls
-  host: open.spotify.com
 auth:
   type: disabled
 forward:
@@ -103,27 +100,21 @@ docker run -d --name hysteria2 \
   -p $HYSTERIA_PORT:$HYSTERIA_PORT/udp \
   tobyxdd/hysteria server --config /etc/hysteria/config.yaml
 
-# ========== 分流 IP 拉取 ==========
-echo "[+] 获取最新 Telegram / Signal / YouTube IP..."
-
-# Telegram
+# ========== 拉取 Telegram / Signal / YouTube IP ==========
+echo "[+] 获取分流目标 IP..."
 curl -s https://core.telegram.org/resources/cidr.txt | grep -Eo '([0-9.]+/..?)' > "$CONFIG_GEN/telegram.txt"
-
-# Signal（修复方式）
 {
   dig +short signal.org
   dig +short www.signal.org
 } | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' | sort -u > "$CONFIG_GEN/signal.txt"
-
-# YouTube
 dig +short youtube.com | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' > "$CONFIG_GEN/youtube.txt"
 
-# 合并 IP（用临时文件避免冲突）
+# 合并 IP 列表
 cat "$CONFIG_GEN/telegram.txt" "$CONFIG_GEN/signal.txt" "$CONFIG_GEN/youtube.txt" > "$CONFIG_GEN/split_ips.tmp"
 mv "$CONFIG_GEN/split_ips.tmp" "$CONFIG_GEN/split_ips.txt"
 
-# ========== 客户端配置生成 ==========
-echo "[+] 生成客户端配置..."
+# ========== 客户端配置 ==========
+echo "[+] 生成客户端配置文件..."
 cat > "$CONFIG_GEN/wg-global.conf" <<EOF
 [Interface]
 PrivateKey = $CLIENT_PRIV_KEY
@@ -147,16 +138,16 @@ DNS = 1.1.1.1
 PublicKey = $SERVER_PUB_KEY
 Endpoint = $SERVER_IP:$HYSTERIA_PORT
 AllowedIPs = $(paste -sd "," "$CONFIG_GEN/split_ips.txt")
-PersistentKeepalive = 25
+PersistentKeepalive = 120
 EOF
 
-# ========== 二维码生成 ==========
+# ========== 生成二维码 ==========
 echo "[+] 生成二维码..."
 qrencode -o "$QR_DIR/qr-global.png" < "$CONFIG_GEN/wg-global.conf"
 qrencode -o "$QR_DIR/qr-split.png" < "$CONFIG_GEN/wg-split.conf"
 
-# ========== ZIP 打包 ==========
-echo "[+] 打包配置..."
+# ========== 打包客户端配置 ==========
+echo "[+] 打包客户端配置..."
 cd "$CONFIG_GEN"
 zip -r "$HOME/guard/client-configs.zip" wg-*.conf
 cp "$QR_DIR"/*.png "$HOME/guard/"
