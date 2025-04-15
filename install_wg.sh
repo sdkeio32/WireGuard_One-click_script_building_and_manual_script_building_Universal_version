@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-# ========== 自动获取公网 IPv4 ==========
+# 自动获取公网 IP
 SERVER_IP=$(curl -s https://api.ipify.org)
 
-# ========== 变量定义 ==========
+# 路径定义
 WG_DIR="$HOME/guard/wireguard"
 TOOL_DIR="$HOME/guard/tools"
 QR_DIR="$HOME/guard/qrcode"
@@ -17,11 +17,11 @@ WG_IFACE="wg0"
 
 mkdir -p "$WG_DIR" "$TOOL_DIR" "$QR_DIR" "$CONFIG_GEN"
 
-echo "[+] 安装基本依赖..."
+echo "[+] 安装依赖..."
 sudo apt update
 sudo apt install -y wireguard qrencode curl unzip iptables iproute2 jq lsb-release ca-certificates gnupg dnsutils
 
-# ========== Docker 安装 ==========
+# 安装 Docker
 echo "[+] 安装 Docker..."
 sudo apt remove -y docker docker-engine docker.io containerd runc || true
 sudo mkdir -p /etc/apt/keyrings
@@ -33,29 +33,28 @@ echo \
 sudo apt update
 sudo apt install -y docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin
 
-# ========== WireGuard 密钥生成 ==========
+# WireGuard 密钥生成
 cd "$WG_DIR"
 wg genkey | tee server_private.key | wg pubkey > server_public.key
 wg genkey | tee client_private.key | wg pubkey > client_public.key
-
 SERVER_PRIV_KEY=$(cat server_private.key)
 SERVER_PUB_KEY=$(cat server_public.key)
 CLIENT_PRIV_KEY=$(cat client_private.key)
 CLIENT_PUB_KEY=$(cat client_public.key)
 
-# ========== 随机端口 ==========
+# 随机端口
 WG_PORT=$(shuf -i ${WG_PORT_START}-${WG_PORT_END} -n 1)
 HYSTERIA_PORT=$(shuf -i ${HYSTERIA_PORT_START}-${HYSTERIA_PORT_END} -n 1)
 
 echo "[+] WireGuard 端口: $WG_PORT"
 echo "[+] Hysteria2 端口: $HYSTERIA_PORT"
 
-# ========== 启用 IPv4 转发 ==========
+# 开启 IPv4 转发
 echo "[+] 启用 IPv4 转发..."
 echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 
-# ========== WireGuard 配置 ==========
+# WireGuard 配置
 cat > "$WG_DIR/wg0.conf" <<EOF
 [Interface]
 PrivateKey = $SERVER_PRIV_KEY
@@ -72,26 +71,27 @@ EOF
 sudo wg-quick down "$WG_IFACE" 2>/dev/null || true
 sudo wg-quick up "$WG_IFACE"
 
-# ========== TLS 自签证书 ==========
+# TLS 证书
 echo "[+] 生成自签 TLS 证书..."
 mkdir -p "$TOOL_DIR/tls"
 openssl req -x509 -newkey rsa:2048 -keyout "$TOOL_DIR/tls/key.pem" -out "$TOOL_DIR/tls/cert.pem" -days 365 -nodes -subj "/CN=spotify.com"
 
-# ========== Hysteria2 配置 ==========
-echo "[+] 部署 Hysteria2..."
+# Hysteria2 配置
+echo "[+] 生成 Hysteria2 配置..."
 cat > "$TOOL_DIR/hysteria2-config.yaml" <<EOF
 listen: :$HYSTERIA_PORT
 tls:
   cert: /etc/hysteria/cert.pem
   key: /etc/hysteria/key.pem
 auth:
-  type: disabled
+  mode: disabled
 forward:
   type: wireguard
   server: 127.0.0.1:$WG_PORT
   password: ""
 EOF
 
+# 启动容器
 docker stop hysteria2 2>/dev/null || true
 docker rm hysteria2 2>/dev/null || true
 docker run -d --name hysteria2 \
@@ -100,7 +100,14 @@ docker run -d --name hysteria2 \
   -p $HYSTERIA_PORT:$HYSTERIA_PORT/udp \
   tobyxdd/hysteria server --config /etc/hysteria/config.yaml
 
-# ========== 拉取 Telegram / Signal / YouTube IP ==========
+# 等待启动 & 检查状态
+sleep 3
+if ! docker logs hysteria2 2>&1 | grep -q "server started"; then
+  echo "❌ Hysteria2 启动失败，请检查配置或端口占用！"
+  exit 1
+fi
+
+# 拉取 IP 分流
 echo "[+] 获取分流目标 IP..."
 curl -s https://core.telegram.org/resources/cidr.txt | grep -Eo '([0-9.]+/..?)' > "$CONFIG_GEN/telegram.txt"
 {
@@ -109,12 +116,10 @@ curl -s https://core.telegram.org/resources/cidr.txt | grep -Eo '([0-9.]+/..?)' 
 } | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' | sort -u > "$CONFIG_GEN/signal.txt"
 dig +short youtube.com | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' > "$CONFIG_GEN/youtube.txt"
 
-# 合并 IP 列表
 cat "$CONFIG_GEN/telegram.txt" "$CONFIG_GEN/signal.txt" "$CONFIG_GEN/youtube.txt" > "$CONFIG_GEN/split_ips.tmp"
 mv "$CONFIG_GEN/split_ips.tmp" "$CONFIG_GEN/split_ips.txt"
 
-# ========== 客户端配置 ==========
-echo "[+] 生成客户端配置文件..."
+# 客户端配置文件
 cat > "$CONFIG_GEN/wg-global.conf" <<EOF
 [Interface]
 PrivateKey = $CLIENT_PRIV_KEY
@@ -138,20 +143,19 @@ DNS = 1.1.1.1
 PublicKey = $SERVER_PUB_KEY
 Endpoint = $SERVER_IP:$HYSTERIA_PORT
 AllowedIPs = $(paste -sd "," "$CONFIG_GEN/split_ips.txt")
-PersistentKeepalive = 120
+PersistentKeepalive = 25
 EOF
 
-# ========== 生成二维码 ==========
-echo "[+] 生成二维码..."
+# 二维码输出
 qrencode -o "$QR_DIR/qr-global.png" < "$CONFIG_GEN/wg-global.conf"
 qrencode -o "$QR_DIR/qr-split.png" < "$CONFIG_GEN/wg-split.conf"
 
-# ========== 打包客户端配置 ==========
-echo "[+] 打包客户端配置..."
+# 打包
 cd "$CONFIG_GEN"
 zip -r "$HOME/guard/client-configs.zip" wg-*.conf
 cp "$QR_DIR"/*.png "$HOME/guard/"
 
+# 完成提示
 echo -e "\n✅ 安装完成！"
 echo "📄 客户端配置："
 echo "   $CONFIG_GEN/wg-global.conf"
