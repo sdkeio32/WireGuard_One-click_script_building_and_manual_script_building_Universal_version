@@ -50,14 +50,19 @@ HYSTERIA_PORT=$(shuf -i ${HYSTERIA_PORT_START}-${HYSTERIA_PORT_END} -n 1)
 echo "[+] WireGuard 端口: $WG_PORT"
 echo "[+] Hysteria2 端口: $HYSTERIA_PORT"
 
+# ========== 启用 IPv4 转发 ==========
+echo "[+] 启用 IPv4 转发..."
+echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+
 # ========== WireGuard 配置 ==========
 cat > "$WG_DIR/wg0.conf" <<EOF
 [Interface]
 PrivateKey = $SERVER_PRIV_KEY
 Address = 10.10.0.1/24
 ListenPort = $WG_PORT
-PostUp = iptables -A FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+PostUp = iptables -A FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -D POSTROUTING -s 10.10.0.0/24 -o eth0 -j MASQUERADE
 
 [Peer]
 PublicKey = $CLIENT_PUB_KEY
