@@ -1,70 +1,122 @@
 #!/bin/bash
-
 set -e
 
-echo "🔧 开始一键安装 WireGuard + Hysteria2 (非Docker 版)"
+echo -e "\n🔧 开始一键安装 WireGuard + Hysteria2 (非Docker 版)"
 
-WG_PORT=$(shuf -i 39500-39509 -n 1)
-HYSTERIA_PORT=$(shuf -i 39510-39519 -n 1)
-WG_INTERFACE="wg0"
-WG_DIR="/etc/wireguard"
-TLS_DIR="/etc/hysteria"
-CONFIG_PATH="/etc/hysteria/config.yaml"
-CLIENT_CONFIG_DIR="$HOME/guard/configs"
-QRCODE_DIR="$HOME/guard/qrcode"
+# ----------------------------
+# 函数：检测并安装依赖
+# ----------------------------
+check_and_install() {
+    for pkg in "$@"; do
+        if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+            echo "[+] 安装缺失依赖：$pkg"
+            apt install -y "$pkg" >/dev/null
+        else
+            echo "[√] 依赖已安装：$pkg"
+        fi
+    done
+}
 
-mkdir -p "$WG_DIR" "$TLS_DIR" "$CLIENT_CONFIG_DIR" "$QRCODE_DIR"
+# ----------------------------
+# 基本依赖
+# ----------------------------
+echo -e "\n[+] 检查并安装必要依赖..."
+apt update -y >/dev/null
+check_and_install \
+    iproute2 \
+    jq \
+    qrencode \
+    wireguard \
+    curl \
+    iptables \
+    unzip \
+    dnsutils \
+    resolvconf \
+    gnupg \
+    ca-certificates \
+    lsb-release \
+    net-tools
 
-echo "[+] 安装依赖..."
-apt update -y
-apt install -y wireguard qrencode curl unzip jq iproute2 iptables dnsutils
+# ----------------------------
+# 启用 IPv4 转发
+# ----------------------------
+echo -e "\n[+] 启用 IPv4 转发..."
+sysctl -w net.ipv4.ip_forward=1 >/dev/null
+grep -q "^net.ipv4.ip_forward=1" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 
-echo "[+] 开启 IPv4 转发..."
-sysctl -w net.ipv4.ip_forward=1
-echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-wg.conf
-sysctl --system > /dev/null
-
-echo "[+] 安装 Hysteria2 (非 Docker)..."
+# ----------------------------
+# 安装 Hysteria2
+# ----------------------------
+echo -e "\n[+] 安装 Hysteria2 (非 Docker)..."
 bash <(curl -fsSL https://get.hy2.sh/)
 
-echo "[+] 创建 WireGuard 密钥对..."
-[[ -f "$WG_DIR/private.key" ]] || wg genkey | tee "$WG_DIR/private.key" | wg pubkey > "$WG_DIR/public.key"
+# ----------------------------
+# 准备目录
+# ----------------------------
+WG_CONF_DIR="/etc/wireguard"
+mkdir -p "$WG_CONF_DIR"
+mkdir -p /root/guard/configs /root/guard/qrcode /etc/hysteria
 
-PRIVATE_KEY=$(cat "$WG_DIR/private.key")
-PUBLIC_KEY=$(cat "$WG_DIR/public.key")
+# ----------------------------
+# 生成密钥对
+# ----------------------------
+echo -e "\n[+] 创建 WireGuard 密钥对..."
+server_private_key=$(wg genkey)
+server_public_key=$(echo "$server_private_key" | wg pubkey)
 
-echo "[+] 写入 WireGuard 配置..."
-cat > "$WG_DIR/$WG_INTERFACE.conf" <<EOF
+client_private_key=$(wg genkey)
+client_public_key=$(echo "$client_private_key" | wg pubkey)
+
+# ----------------------------
+# 随机端口
+# ----------------------------
+WG_PORT=$((RANDOM % 1000 + 39500))
+HYST_PORT=$((RANDOM % 1000 + 39510))
+
+# ----------------------------
+# 写入 WireGuard 配置
+# ----------------------------
+echo -e "\n[+] 写入 WireGuard 配置..."
+cat > "$WG_CONF_DIR/wg0.conf" <<EOF
 [Interface]
-PrivateKey = $PRIVATE_KEY
+PrivateKey = $server_private_key
 Address = 10.66.66.1/24
 ListenPort = $WG_PORT
 MTU = 1420
-PostUp = iptables -A FORWARD -i $WG_INTERFACE -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i $WG_INTERFACE -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
 
 [Peer]
-PublicKey = xxx-client-key
+PublicKey = $client_public_key
 AllowedIPs = 10.66.66.2/32
 EOF
 
-echo "[+] 启动 WireGuard 接口..."
-ip link show $WG_INTERFACE &>/dev/null && wg-quick down $WG_INTERFACE
-systemctl enable wg-quick@$WG_INTERFACE
-systemctl start wg-quick@$WG_INTERFACE
+# ----------------------------
+# 启动 wg0 接口
+# ----------------------------
+echo -e "\n[+] 启动 WireGuard 接口..."
+wg-quick down wg0 2>/dev/null || true
+wg-quick up wg0
 
-echo "[+] 生成自签 TLS 证书..."
-openssl req -x509 -newkey rsa:2048 -sha256 -nodes \
-  -keyout "$TLS_DIR/key.pem" -out "$TLS_DIR/cert.pem" -days 3650 \
-  -subj "/CN=hy2.local"
+# ----------------------------
+# 自签 TLS
+# ----------------------------
+echo -e "\n[+] 生成自签 TLS 证书..."
+openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
+  -keyout /etc/hysteria/key.pem \
+  -out /etc/hysteria/cert.pem \
+  -subj "/CN=$(hostname)" >/dev/null 2>&1
 
-echo "[+] 生成 Hysteria2 配置..."
-cat > "$CONFIG_PATH" <<EOF
-listen: :$HYSTERIA_PORT
+# ----------------------------
+# Hysteria2 配置
+# ----------------------------
+echo -e "\n[+] 写入 Hysteria2 配置..."
+cat > /etc/hysteria/config.yaml <<EOF
+listen: :$HYST_PORT
 
 tls:
-  cert: $TLS_DIR/cert.pem
-  key: $TLS_DIR/key.pem
+  cert: /etc/hysteria/cert.pem
+  key: /etc/hysteria/key.pem
 
 auth:
   type: disabled
@@ -72,19 +124,21 @@ auth:
 forward:
   type: wireguard
   server: 127.0.0.1:$WG_PORT
-  localAddress: 10.66.66.2/32
-  privateKey: $PRIVATE_KEY
 EOF
 
-echo "[+] 创建 Hysteria2 systemd 服务..."
+# ----------------------------
+# 创建 systemd 服务
+# ----------------------------
+echo -e "\n[+] 创建 Hysteria2 systemd 服务..."
 cat > /etc/systemd/system/hysteria-server.service <<EOF
 [Unit]
 Description=Hysteria Server Service (config.yaml)
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/hysteria server --config $CONFIG_PATH
+ExecStart=/usr/local/bin/hysteria server --config /etc/hysteria/config.yaml
 Restart=on-failure
+User=root
 LimitNOFILE=65535
 
 [Install]
@@ -92,52 +146,52 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reexec
+systemctl daemon-reload
 systemctl enable hysteria-server
 systemctl restart hysteria-server
 
-echo "[+] 获取 Telegram / Signal / YouTube IP..."
-SPLIT_IPS="$CLIENT_CONFIG_DIR/split_ips.txt"
-> "$SPLIT_IPS"
-
-for domain in telegram.org signal.org youtube.com; do
-  dig +short $domain | grep -Eo '([0-9.]+)' | sed 's/$/\/32/' >> "$SPLIT_IPS"
-done
-
-echo "[+] 生成客户端配置文件..."
-cat > "$CLIENT_CONFIG_DIR/wg-global.conf" <<EOF
+# ----------------------------
+# 写入客户端配置文件
+# ----------------------------
+echo -e "\n[+] 生成客户端配置文件..."
+server_ip=$(curl -s https://api.ipify.org)
+cat > /root/guard/configs/wg-global.conf <<EOF
 [Interface]
-PrivateKey = xxx-client-private-key
-Address = 10.66.66.2/32
+PrivateKey = $client_private_key
+Address = 10.66.66.2/24
 DNS = 1.1.1.1
 
 [Peer]
-PublicKey = $PUBLIC_KEY
-Endpoint = your_domain_or_ip:$HYSTERIA_PORT
+PublicKey = $server_public_key
+Endpoint = $server_ip:$WG_PORT
 AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
 EOF
 
-cat > "$CLIENT_CONFIG_DIR/wg-split.conf" <<EOF
-[Interface]
-PrivateKey = xxx-client-private-key
-Address = 10.66.66.2/32
-DNS = 1.1.1.1
+cp /root/guard/configs/wg-global.conf /root/guard/configs/wg-split.conf
 
-[Peer]
-PublicKey = $PUBLIC_KEY
-Endpoint = your_domain_or_ip:$HYSTERIA_PORT
-AllowedIPs = $(paste -sd, $SPLIT_IPS)
-EOF
+# ----------------------------
+# 生成二维码
+# ----------------------------
+echo -e "\n[+] 生成二维码..."
+qrencode -o /root/guard/qrcode/qr-global.png -t png < /root/guard/configs/wg-global.conf
+qrencode -o /root/guard/qrcode/qr-split.png -t png < /root/guard/configs/wg-split.conf
 
-echo "[+] 生成二维码..."
-qrencode -o "$QRCODE_DIR/qr-global.png" < "$CLIENT_CONFIG_DIR/wg-global.conf"
-qrencode -o "$QRCODE_DIR/qr-split.png" < "$CLIENT_CONFIG_DIR/wg-split.conf"
+# ----------------------------
+# 打包配置
+# ----------------------------
+echo -e "\n[+] 打包客户端配置..."
+zip -j /root/guard/client-configs.zip /root/guard/configs/wg-*.conf /root/guard/qrcode/*.png >/dev/null
 
-echo "[+] 打包客户端配置..."
-zip -j "$CLIENT_CONFIG_DIR/client-configs.zip" "$CLIENT_CONFIG_DIR"/*.conf "$QRCODE_DIR"/*.png
-
+# ----------------------------
+# 结束提示
+# ----------------------------
+echo ""
 echo "✅ 安装完成！"
-echo "📁 配置文件目录: $CLIENT_CONFIG_DIR"
-echo "📱 二维码文件：$QRCODE_DIR"
+echo "📁 配置文件目录: /root/guard/configs"
+echo "📱 二维码文件：/root/guard/qrcode"
+echo "📦 客户端 ZIP: /root/guard/client-configs.zip"
+echo ""
 echo "🚀 建议运行诊断脚本确认状态："
 echo ""
 echo "   bash <(curl -fsSL https://raw.githubusercontent.com/sdkeio32/WireGuard_One-click_script_building_and_manual_script_building_Universal_version/main/diagnose.sh)"
