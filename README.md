@@ -53,10 +53,16 @@ Telegram 用户名： @tgbot996
 
 ================================================
 
+wget https://raw.githubusercontent.com/sdkeio32/WireGuard_One-click_script_building_and_manual_script_building_Universal_version/main/install.sh
 
-curl -sSL https://raw.githubusercontent.com/sdkeio32/WireGuard_One-click_script_building_and_manual_script_building_Universal_version/main/install_wg.sh | bash
+chmod +x install.sh
 
+./install.sh
 
+chmod +x install_vpn.sh
 
+./install_vpn.sh
 
-
+生成 WireGuard 客户端配置: /guard/conf/client_39573.conf
+生成 udp2raw 客户端配置: /guard/conf/udp2raw_client_39573.conf
+生成二维码: /guard/qrcodes/vpn_config_39573.png
