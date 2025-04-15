@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# 创建一键安装脚本
+cat > /root/install_vpn.sh << 'EOF'
+#!/bin/bash
+
 # 颜色定义
 RED="\033[31m"
 GREEN="\033[32m"
@@ -12,49 +16,30 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# 函数：检查命令执行状态
-check_status() {
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}成功${PLAIN}"
-    else
-        echo -e "${RED}失败${PLAIN}"
-        exit 1
-    fi
-}
-
-echo -e "${YELLOW}开始安装VPN服务...${PLAIN}"
-
 # 创建目录结构
 echo -e "${GREEN}创建目录结构...${PLAIN}"
 mkdir -p /guard/{bin,conf,scripts,qrcodes}
-check_status
 
 # 安装依赖
 echo -e "${GREEN}安装依赖包...${PLAIN}"
 apt update
 apt install -y wireguard qrencode iptables curl wget git
-check_status
 
 # 下载udp2raw
 echo -e "${GREEN}下载udp2raw...${PLAIN}"
 cd /tmp
 wget https://github.com/wangyu-/udp2raw/releases/download/20230206.0/udp2raw_binaries.tar.gz
-check_status
 tar -xzvf udp2raw_binaries.tar.gz
 cp udp2raw_amd64 /guard/bin/
 chmod +x /guard/bin/udp2raw_amd64
-check_status
 
 # 生成WireGuard密钥
 echo -e "${GREEN}生成WireGuard密钥...${PLAIN}"
-mkdir -p /etc/wireguard
 wg genkey | tee /guard/conf/server_private.key | wg pubkey > /guard/conf/server_public.key
 CLIENT_PRIVATE_KEY=$(wg genkey)
 CLIENT_PUBLIC_KEY=$(echo "$CLIENT_PRIVATE_KEY" | wg pubkey)
-check_status
 
 # 创建WireGuard配置
-echo -e "${GREEN}创建WireGuard配置...${PLAIN}"
 cat > /etc/wireguard/wg0.conf << WGCONF
 [Interface]
 PrivateKey = $(cat /guard/conf/server_private.key)
@@ -67,39 +52,20 @@ PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING 
 PublicKey = ${CLIENT_PUBLIC_KEY}
 AllowedIPs = 10.0.0.2/32
 WGCONF
-check_status
 
 # 创建udp2raw配置
-echo -e "${GREEN}创建udp2raw配置...${PLAIN}"
-VPN_PASSWORD="vpn_password_$(date +%s)"
 cat > /guard/conf/udp2raw.conf << CONF
 -s
 -l 0.0.0.0:39500
 -r 127.0.0.1:39998
 -a
--k "${VPN_PASSWORD}"
+-k "vpn_password_$(date +%s)"
 --raw-mode faketcp
 --cipher-mode aes128cbc
 --auth-mode hmac_sha1
 CONF
-check_status
-
-# 创建动态端口脚本
-echo -e "${GREEN}创建动态端口管理脚本...${PLAIN}"
-cat > /guard/scripts/port_manager.sh << 'PORTSCRIPT'
-#!/bin/bash
-while true; do
-    NEW_PORT=$(shuf -i 39501-39990 -n 1)
-    sed -i "s/-l 0.0.0.0:[0-9]*/-l 0.0.0.0:${NEW_PORT}/" /guard/conf/udp2raw.conf
-    systemctl restart udp2raw
-    sleep 300
-done
-PORTSCRIPT
-chmod +x /guard/scripts/port_manager.sh
-check_status
 
 # 创建客户端配置生成脚本
-echo -e "${GREEN}创建客户端配置生成脚本...${PLAIN}"
 cat > /guard/scripts/generate_client.sh << 'GENSCRIPT'
 #!/bin/bash
 if [ $# -eq 1 ]; then
@@ -133,11 +99,12 @@ CLIENTCONF
 cat > /guard/conf/udp2raw_client_${CLIENT_PORT}.conf << RAWCONF
 -c
 -l 0.0.0.0:39998
--r ${SERVER_IP}:${CLIENT_PORT}
+-r ${SERVER_IP}:39500
 -k "${PASSWORD}"
 --raw-mode faketcp
 --cipher-mode aes128cbc
 --auth-mode hmac_sha1
+--source-port ${CLIENT_PORT}
 RAWCONF
 
 # 生成二维码
@@ -149,10 +116,8 @@ echo "udp2raw配置：/guard/conf/udp2raw_client_${CLIENT_PORT}.conf"
 echo "二维码：/guard/qrcodes/vpn_config_${CLIENT_PORT}.png"
 GENSCRIPT
 chmod +x /guard/scripts/generate_client.sh
-check_status
 
-# 创建服务文件
-echo -e "${GREEN}创建系统服务...${PLAIN}"
+# 配置系统服务
 cat > /etc/systemd/system/udp2raw.service << SERVICE
 [Unit]
 Description=udp2raw Service
@@ -168,53 +133,36 @@ RestartSec=3
 WantedBy=multi-user.target
 SERVICE
 
-cat > /etc/systemd/system/port_manager.service << SERVICE
-[Unit]
-Description=UDP2Raw Port Manager
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/guard/scripts/port_manager.sh
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-SERVICE
-check_status
-
 # 配置防火墙规则
 echo -e "${GREEN}配置防火墙规则...${PLAIN}"
 ufw allow 22/tcp
 ufw allow 39000:40000/tcp
 ufw allow 39000:40000/udp
-check_status
 
 # 启用IP转发
-echo -e "${GREEN}配置IP转发...${PLAIN}"
 echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
 sysctl -p
-check_status
 
 # 启动服务
 echo -e "${GREEN}启动服务...${PLAIN}"
 systemctl daemon-reload
 systemctl enable udp2raw
 systemctl start udp2raw
-systemctl enable port_manager
-systemctl start port_manager
 systemctl enable wg-quick@wg0
 systemctl start wg-quick@wg0
-check_status
+
+# 克隆GitHub仓库
+echo -e "${GREEN}克隆GitHub仓库...${PLAIN}"
+cd /root
+git clone https://github.com/sdkeio32/WireGuard_One-click_script_building_and_manual_script_building_Universal_version.git vpn_scripts
 
 # 生成初始客户端配置
-echo -e "${GREEN}生成初始客户端配置...${PLAIN}"
 /guard/scripts/generate_client.sh
-check_status
 
 echo -e "${GREEN}安装完成！${PLAIN}"
 echo -e "${YELLOW}使用以下命令生成新的客户端配置：${PLAIN}"
 echo -e "${GREEN}/guard/scripts/generate_client.sh [端口号]${PLAIN}"
 echo -e "${YELLOW}端口号可选，不指定则随机生成${PLAIN}"
-echo -e "${YELLOW}客户端配置文件和二维码位于 /guard/conf 和 /guard/qrcodes 目录${PLAIN}"
+EOF
+
+chmod +x /root/install_vpn.sh
