@@ -159,7 +159,7 @@ cat > /root/guard/configs/wg-global.conf <<EOF
 [Interface]
 PrivateKey = $client_private_key
 Address = 10.66.66.2/24
-DNS = 1.1.1.1
+DNS = 8.8.8.8
 
 [Peer]
 PublicKey = $server_public_key
